@@ -1,0 +1,10 @@
+{
+    "mqtt": {
+        "host": "pi1.local",
+        "port": 1883,
+        "serialTopic":"src/pcdell.USB0/serial2mqtt/"
+    },
+    "programmer": {
+        "file": "../image.bin"
+    }
+}
