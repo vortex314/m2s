@@ -41,21 +41,40 @@ int baudSymbol(uint32_t br)
     return B115200;
 }
 
+void M2s::stdinSetup()
+{
+    struct termios ctrl;
+    tcgetattr(STDIN_FILENO, &ctrl);
+    ctrl.c_lflag &= ~( ICANON | ECHO ); // turning off canonical mode makes input unbuffered
+    tcsetattr(STDIN_FILENO, TCSANOW, &ctrl);
+}
+
 
 void M2s::init()
 {
     _config.setNameSpace("mqtt");
     _config.get("port",_mqttPort,1883);
     _config.get("host",_mqttHost,"test.mosquitto.org");
-    std::string topicDefault;
-    topicDefault.append("src/").append(Sys::hostname()).append(".USB0/serialmqtt/");
-    _config.get("serialTopic",_mqttSerialTopic,topicDefault);
+    std::string defaultDevice;
+    defaultDevice.append(Sys::hostname()).append(".USB0");
+    _config.get("serialDevice",_mqttSerialDevice,defaultDevice);
+    _mqttSerialTopic="src/"+_mqttSerialDevice+"/serial2mqtt/";
     _mqttSubscribedTo = _mqttSerialTopic+"#";
-    _mqttSerialLogTopic = _mqttSerialTopic+"/log";
+    _mqttSerialLogTopic = _mqttSerialTopic+"log";
     _mqttClientId = Sys::hostname();
     _mqttClientId += "-";
     _mqttClientId += std::to_string(Sys::millis());
-    _mqttKeepAliveInterval = 20;
+    _mqttLogicalDeviceNameTopic = _mqttSerialTopic+"device";
+    INFO(" waiting for logical device name on %s ",_mqttLogicalDeviceNameTopic.c_str());
+    _config.get("keepAliveInterval",_mqttKeepAliveInterval,20);
+    _config.get("willTopic",_mqttWillTopic,_mqttSerialTopic+"/system/alive");
+    _config.get("willMessage",_mqttWillMessage,"false");
+    _mqttWillQos=0;
+    _mqttWillRetained=false;
+    _mqttLogicalDeviceTopic="";
+    _config.setNameSpace("programmer");
+    _config.get("binFile",_binFileName,"image.bin");
+    INFO(" loading bin file : %s ",_binFileName.c_str());
 
     if (pipe(_signalFd) < 0)        INFO("Failed to create pipe: %s (%d)", strerror(errno), errno);
 
@@ -89,6 +108,7 @@ void M2s::run()
 
     });
     mqttConnect();
+    stdinSetup();
 
     while(true) {
         while(true) {
@@ -99,7 +119,22 @@ void M2s::run()
             case TIMEOUT: {
                 break;
             }
-            case SERIAL_RXD : {
+            case KEY_PRESSED : {
+                char buffer;
+                read(_stdinFd,&buffer,1);
+                if ( buffer == 'm' ) signal(KEY_TOGGLE_SHOW_MQTT);
+                if ( buffer == 'p') signal(KEY_PROGRAM);
+                break;
+            }
+            case KEY_TOGGLE_SHOW_MQTT : {
+                INFO(" TOGGLE MQTT view ");
+                _showMqtt = !_showMqtt;
+                break;
+            }
+            case KEY_PROGRAM : {
+                INFO(" Programming... ");
+                sendBinFile("dst/"+_mqttSerialDevice+"/serial2mqtt/flash",_binFileName);
+                // read bin file and send as blob
                 break;
             }
             case SERIAL_ERROR : {
@@ -122,11 +157,11 @@ void M2s::run()
                 break;
             }
             case MQTT_SUBSCRIBE_SUCCESS: {
-                INFO("MQTT_SUBSCRIBE_SUCCESS %s ",_mqttSubscribedTo.c_str());
+                INFO("MQTT_SUBSCRIBE_SUCCESS");
                 break;
             }
             case MQTT_SUBSCRIBE_FAIL: {
-                WARN("MQTT_SUBSCRIBE_FAIL %s ",_mqttSubscribedTo.c_str());
+                WARN("MQTT_SUBSCRIBE_FAIL");
                 mqttDisconnect();
                 break;
             }
@@ -165,7 +200,6 @@ void M2s::signal(uint8_t m)
 M2s::Signal M2s::waitSignal(uint32_t timeout)
 {
     Signal returnSignal=TIMEOUT;
-    int _binFileFd=0;
     Bytes bytes(1024);
     uint8_t buffer[1024];
     fd_set rfds;
@@ -187,15 +221,15 @@ M2s::Signal M2s::waitSignal(uint32_t timeout)
         FD_ZERO(&rfds);
         FD_ZERO(&wfds);
         FD_ZERO(&efds);
-        if(_binFileFd) {
-            FD_SET(_binFileFd, &rfds);
-            FD_SET(_binFileFd, &efds);
+        if(_stdinFd>=0) {
+            FD_SET(_stdinFd, &rfds);
+            FD_SET(_stdinFd, &efds);
         }
         if(_signalFd[0]) {
             FD_SET(_signalFd[0], &rfds);
             FD_SET(_signalFd[0], &efds);
         }
-        int maxFd = _binFileFd < _signalFd[0] ? _signalFd[0] : _binFileFd;
+        int maxFd = _stdinFd < _signalFd[0] ? _signalFd[0] : _stdinFd;
         maxFd += 1;
 
         start = Sys::millis();
@@ -210,14 +244,14 @@ M2s::Signal M2s::waitSignal(uint32_t timeout)
         if(retval < 0) {
             WARN(" select() : error : %s (%d)", strerror(errno), errno);
         } else if(retval > 0) { // one of the fd was set
-            if(FD_ISSET(_binFileFd, &rfds)) {
-                return SERIAL_RXD;
+            if(FD_ISSET(_stdinFd, &rfds)) {
+                return KEY_PRESSED;
             }
             if(FD_ISSET(_signalFd[0], &rfds)) {
                 ::read(_signalFd[0], buffer,1); // read 1 event
                 return (Signal)buffer[0];
             }
-            if(FD_ISSET(_binFileFd, &efds)) {
+            if(FD_ISSET(_stdinFd, &efds)) {
                 WARN("serial  error : %s (%d)", strerror(errno), errno);
                 return SERIAL_ERROR;
             }
@@ -258,13 +292,20 @@ bool startsWith(std::string src,std::string pattern)
 
 void M2s::serialPublish(std::string topic,Bytes message,int qos,bool retained)
 {
-    std::string line;
-    Str msg(1024);
-    msg.write( message.data(),0,message.length());
+    std::string msg;
+    msg.append((char*)message.data(),message.length());
     if ( startsWith(topic,_mqttSerialLogTopic ) ) {
         printf("%s\n",msg.c_str());
     } else {
-        printf(" %s : %s \n",topic.c_str(),msg.c_str());
+        if ( topic.compare(_mqttLogicalDeviceNameTopic)==0) {
+            if ( msg.compare(_mqttLogicalDeviceTopic) != 0 ) {
+                INFO(" subscribed to device : %s",msg.c_str());
+                mqttSubscribe("src/"+msg+"/#");
+                _mqttLogicalDeviceTopic = msg;
+            }
+        }
+        if ( _showMqtt )
+            printf(" %s : %s \n",topic.c_str(),msg.c_str());
     }
 }
 
@@ -306,7 +347,7 @@ Erc M2s::mqttConnect()
     conn_opts.context = this;
     conn_opts.password =NULL;
     conn_opts.username =NULL;
- //   conn_opts.retryInterval=4;
+//   conn_opts.retryInterval=4;
 //    conn_opts.automaticReconnect=true;
 
     will_opts.message = _mqttWillMessage.c_str();
@@ -314,6 +355,7 @@ Erc M2s::mqttConnect()
     will_opts.qos = _mqttWillQos;
     will_opts.retained = _mqttWillRetained;
     conn_opts.will = &will_opts;
+    conn_opts.will = 0;
     if ((rc = MQTTAsync_connect(_client, &conn_opts)) != MQTTASYNC_SUCCESS) {
         WARN("MQTTAsync_connect() failed, return code %d", rc);
         return E_NOT_FOUND;
@@ -459,4 +501,46 @@ void M2s::onPublishFailure(void* context, MQTTAsync_failureData* response)
 {
     M2s* me = (M2s*)context;
     me->signal(MQTT_PUBLISH_FAIL);
+}
+
+
+/*
+
+######  ######  #######  #####  ######     #    #     # #     # ####### ######
+#     # #     # #     # #     # #     #   # #   ##   ## ##   ## #       #     #
+#     # #     # #     # #       #     #  #   #  # # # # # # # # #       #     #
+######  ######  #     # #  #### ######  #     # #  #  # #  #  # #####   ######
+#       #   #   #     # #     # #   #   ####### #     # #     # #       #   #
+#       #    #  #     # #     # #    #  #     # #     # #     # #       #    #
+#       #     # #######  #####  #     # #     # #     # #     # ####### #     #
+
+
+*/
+
+void M2s::sendBinFile(std::string topic,std::string binFileName)
+{
+    FILE *f = NULL;
+    long len = 0;
+    uint8_t *data = NULL;
+
+    /* open in read binary mode */
+    f = fopen(binFileName.c_str(),"rb");
+    if ( f!=NULL) {
+        /* get the length */
+        fseek(f, 0, SEEK_END);
+        len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        data = (uint8_t*)malloc(len + 1);
+
+        fread(data, 1, len, f);
+        Bytes bytes(0);
+        bytes.map(data,len);
+        mqttPublish(topic,bytes,0,false);
+        INFO(" send binary to %s ",topic.c_str());
+        free(data);
+        fclose(f);
+    } else {
+        WARN(" binary file %s not found.",binFileName.c_str());
+    }
 }

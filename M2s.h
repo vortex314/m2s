@@ -21,14 +21,19 @@ class M2s
     MQTTAsync_token _deliveredtoken;
     MQTTAsync _client;
     int _signalFd[2];   // pipe fd to wakeup in select
+    int _stdinFd=0;
+    std::string _binFileName;
     // SERIAL
     // MQTT
 
     std::string _mqttHost;
     std::string _mqttClientId;
     uint16_t _mqttPort;
+    std::string _mqttSerialDevice;
     std::string _mqttSerialTopic;
     std::string _mqttSerialLogTopic;
+    std::string _mqttLogicalDeviceTopic;
+    std::string _mqttLogicalDeviceNameTopic;
     
     uint32_t _mqttKeepAliveInterval;
     std::string _mqttWillMessage;
@@ -42,6 +47,7 @@ class M2s
     std::string _mqttSubscribedTo;
 
     Config _config;
+    bool _showMqtt=false;
 
 public:
     typedef enum {PIPE_ERROR,
@@ -58,6 +64,9 @@ public:
                   MQTT_DISCONNECTED,
                   MQTT_MESSAGE_RECEIVED,
                   MQTT_ERROR,
+                  KEY_TOGGLE_SHOW_MQTT,
+                  KEY_PROGRAM,
+                  KEY_PRESSED,
                   TIMEOUT='T'
                  } Signal;
 
@@ -68,6 +77,9 @@ public:
     void threadFunction(void*);
     void signal(uint8_t s);
     Signal waitSignal(uint32_t timeout);
+    
+    void stdinSetup();
+    void sendBinFile(std::string topic,std::string binFileName);
 
 
     void setConfig(Config config);

@@ -2,9 +2,13 @@
     "mqtt": {
         "host": "pi1.local",
         "port": 1883,
-        "serialTopic":"src/pcdell.USB0/serial2mqtt/"
+        "willTopic" : "src/pcdell.USB1/serial2mqtt/system",
+        "willMessage" : "false",
+        "willRetained" : false,
+        "keepAliveInterval" : 5,
+        "serialDevice":"pcdell.USB1"
     },
     "programmer": {
-        "file": "../image.bin"
+        "binFile": "../vertx-esp32/build/vertx-esp32.bin"
     }
 }
