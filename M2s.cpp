@@ -537,7 +537,7 @@ void M2s::sendBinFile(std::string topic,std::string binFileName)
         Bytes bytes(0);
         bytes.map(data,len);
         mqttPublish(topic,bytes,0,false);
-        INFO(" send binary to %s ",topic.c_str());
+        INFO(" send binary %s to %s ",binFileName.c_str(),topic.c_str());
         free(data);
         fclose(f);
     } else {
