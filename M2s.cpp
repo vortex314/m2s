@@ -98,7 +98,11 @@ void M2s::run()
             _mqttConnecting=true;
             mqttConnect();
         } else {
-            mqttPublish("src/pc/m2s/alive","true",0,0);
+            string alive;
+            alive="src/";
+            alive += Sys::hostname();
+            alive += "."+std::to_string(getpid()) +"/m2s/alive";
+            mqttPublish(alive.c_str(),"true",0,0);
         }
     });
     binFileTimer.atDelta(5000).doThis([this]() {

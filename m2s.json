@@ -1,12 +1,12 @@
 {
     "mqtt": {
-        "host": "pi1.local",
+        "host": "limero.ddns.net",
         "port": 1883,
         "willTopic" : "src/pcdell.USB0/serial2mqtt/system",
         "willMessage" : "false",
         "willRetained" : false,
         "keepAliveInterval" : 5,
-        "serialDevice":"pcdell.USB0"
+        "serialDevice":"pcdell.USB1"
     },
     "programmer": {
         "binFile": "../vertx-esp32/build/vertx-esp32.bin"
